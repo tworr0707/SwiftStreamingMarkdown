@@ -19,7 +19,7 @@ indirect enum MarkdownRenderable: Identifiable, Equatable, @unchecked Sendable {
   case paragraph(id: String, content: NSMutableAttributedString)
 
   /// To be rendered as LaTeX (Math formatting)
-  case latex(id: String, content: String)
+  case latex(id: String, content: CompiledLatex)
 
   /// To be rendered as a heading
   case heading(id: String, level: Int, content: NSMutableAttributedString)

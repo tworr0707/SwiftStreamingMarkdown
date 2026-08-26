@@ -11,7 +11,6 @@ import UIKit
 #elseif canImport(AppKit)
 import AppKit
 #endif
-import UniformTypeIdentifiers
 import XCTest
 
 @MainActor
@@ -34,8 +33,12 @@ final class TableViewSnapshotTests: SnapshotTestCase {
     return attachment
   }
 
-  /// Create a LaTeX attachment with proper data encoding
+  /// Create a LaTeX attachment backed by the compiled tree used by the view.
   private func createLatexAttachment(latex: String, fontSize: CGFloat = 16.0) -> NSTextAttachment {
+    guard case .success(let compiled) = CompiledLatex.compile(latex) else {
+      XCTFail("Failed to compile LaTeX attachment")
+      return NSTextAttachment()
+    }
     let textColor = MDColor(Color.Theme.Foreground.Primary.Primary750)
     #if canImport(UIKit)
     let lightHex = textColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)).toHexString()
@@ -44,13 +47,12 @@ final class TableViewSnapshotTests: SnapshotTestCase {
     let lightHex = textColor.resolvedForAppearance(.aqua).toHexString()
     let darkHex = textColor.resolvedForAppearance(.darkAqua).toHexString()
     #endif
-    let attachmentData = LatexAttachmentData(latex: latex, fontSize: fontSize, lightTextColor: lightHex, darkTextColor: darkHex)
-    let encoder = JSONEncoder()
-    guard let payload = try? encoder.encode(attachmentData) else {
-      XCTFail("Failed to encode LaTeX attachment data")
-      return NSTextAttachment()
-    }
-    return NSTextAttachment(data: payload, ofType: UTType.data.identifier)
+    return LatexAttachment(
+      compiled: compiled,
+      fontSize: fontSize,
+      lightTextColor: lightHex,
+      darkTextColor: darkHex
+    )
   }
 
   private func createTableView(_ attributedString: NSAttributedString) -> some View {

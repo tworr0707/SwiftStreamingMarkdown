@@ -9,19 +9,19 @@ import iosMath
 #if canImport(UIKit)
 
 struct BlockMathView: UIViewRepresentable {
-  let latex: String
+  let compiled: CompiledLatex
   let color: Color
   let pointSize: CGFloat
 
-  init(latex: String, color: Color = Color.Theme.Foreground.Primary.Primary750, pointSize: CGFloat = Typography.base.mdFont.pointSize) {
-    self.latex = latex
+  init(compiled: CompiledLatex, color: Color = Color.Theme.Foreground.Primary.Primary750, pointSize: CGFloat = Typography.base.mdFont.pointSize) {
+    self.compiled = compiled
     self.color = color
     self.pointSize = pointSize
   }
 
   func makeUIView(context: Context) -> MTMathUILabel {
     let label = MTMathUILabel()
-    label.latex = latex
+    label.mathList = compiled.mathList
     label.textColor = UIColor(color)
     label.displayErrorInline = false
     label.fontSize = pointSize
@@ -31,7 +31,7 @@ struct BlockMathView: UIViewRepresentable {
 
   func updateUIView(_ uiView: MTMathUILabel, context: Context) {
     uiView.textColor = UIColor(color)
-    uiView.latex = latex
+    uiView.mathList = compiled.mathList
   }
 
   func sizeThatFits(_ proposal: ProposedViewSize, uiView: MTMathUILabel, context: Context) -> CGSize? {
@@ -45,19 +45,19 @@ struct BlockMathView: UIViewRepresentable {
 #elseif canImport(AppKit)
 
 struct BlockMathView: NSViewRepresentable {
-  let latex: String
+  let compiled: CompiledLatex
   let color: Color
   let pointSize: CGFloat
 
-  init(latex: String, color: Color = Color.Theme.Foreground.Primary.Primary750, pointSize: CGFloat = Typography.base.mdFont.pointSize) {
-    self.latex = latex
+  init(compiled: CompiledLatex, color: Color = Color.Theme.Foreground.Primary.Primary750, pointSize: CGFloat = Typography.base.mdFont.pointSize) {
+    self.compiled = compiled
     self.color = color
     self.pointSize = pointSize
   }
 
   func makeNSView(context: Context) -> MTMathUILabel {
     let label = MTMathUILabel()
-    label.latex = latex
+    label.mathList = compiled.mathList
     label.textColor = NSColor(color)
     label.displayErrorInline = false
     label.fontSize = pointSize
@@ -67,7 +67,7 @@ struct BlockMathView: NSViewRepresentable {
 
   func updateNSView(_ nsView: MTMathUILabel, context: Context) {
     nsView.textColor = NSColor(color)
-    nsView.latex = latex
+    nsView.mathList = compiled.mathList
   }
 
   func sizeThatFits(_ proposal: ProposedViewSize, nsView: MTMathUILabel, context: Context) -> CGSize? {

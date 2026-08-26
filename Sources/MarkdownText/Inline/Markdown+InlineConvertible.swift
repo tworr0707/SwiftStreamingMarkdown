@@ -6,7 +6,6 @@
 import Foundation
 import Markdown
 import SwiftUI
-import UniformTypeIdentifiers
 
 extension Markdown.Text: InlineConvertible {
 
@@ -145,35 +144,46 @@ extension Markdown.LineBreak: InlineConvertible {
 
 extension Markdown.InlineCode: InlineConvertible {
 
-  var isInlineLatex: Bool {
-    return self.code.hasPrefix(LaTexPreProcessorImpl.inlineCodePrefix) && self.code.hasSuffix(LaTexPreProcessorImpl.inlineCodeSuffix)
+  private var inlineLatexSource: (body: String, literal: String)? {
+    if self.code.hasPrefix(LaTexPreProcessorImpl.inlineDollarPrefix),
+       self.code.hasSuffix(LaTexPreProcessorImpl.inlineDollarSuffix) {
+      let body = String(self.code
+        .dropFirst(LaTexPreProcessorImpl.inlineDollarPrefix.count)
+        .dropLast(LaTexPreProcessorImpl.inlineDollarSuffix.count))
+      return (body, "$\(body)$")
+    }
+    if self.code.hasPrefix(LaTexPreProcessorImpl.inlineSlashPrefix),
+       self.code.hasSuffix(LaTexPreProcessorImpl.inlineSlashSuffix) {
+      let body = String(self.code
+        .dropFirst(LaTexPreProcessorImpl.inlineSlashPrefix.count)
+        .dropLast(LaTexPreProcessorImpl.inlineSlashSuffix.count))
+      return (body, "\\(\(body)\\)")
+    }
+    return nil
   }
 
   func convert(attributeContainer: NSAttributeContainer, config: MarkdownRenderConfig) -> NSMutableAttributedString {
-    var codeContent = self.code
-    if self.isInlineLatex {
-      codeContent = String(self
-        .code
-        .dropFirst(LaTexPreProcessorImpl.inlineCodePrefix.count)
-        .dropLast(LaTexPreProcessorImpl.inlineCodeSuffix.count))
-      let font = attributeContainer[NSAttributedString.Key.font] as? MDFont ?? config.paragraphStyle.textFonts.normal
-      let textColor = MDColor(config.paragraphStyle.textColor)
-      #if canImport(UIKit)
-      let lightHex = textColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)).toHexString()
-      let darkHex = textColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark)).toHexString()
-      #elseif canImport(AppKit)
-      let lightHex = textColor.resolvedForAppearance(.aqua).toHexString()
-      let darkHex = textColor.resolvedForAppearance(.darkAqua).toHexString()
-      #endif
-      let attachmentData = LatexAttachmentData(
-        latex: codeContent,
-        fontSize: font.pointSize,
-        lightTextColor: lightHex,
-        darkTextColor: darkHex
-      )
-      let encoder = JSONEncoder()
-      if let payload = try? encoder.encode(attachmentData) {
-        let attachment = NSTextAttachment(data: payload, ofType: UTType.data.identifier)
+    if let source = inlineLatexSource {
+      switch CompiledLatex.compile(source.body) {
+      case .failure(let failure):
+        return literalLatex(source.literal, failure: failure, attributes: attributeContainer)
+      case .success(let compiled):
+        let font = attributeContainer[NSAttributedString.Key.font] as? MDFont
+          ?? config.paragraphStyle.textFonts.normal
+        let textColor = MDColor(config.paragraphStyle.textColor)
+        #if canImport(UIKit)
+        let lightHex = textColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)).toHexString()
+        let darkHex = textColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark)).toHexString()
+        #elseif canImport(AppKit)
+        let lightHex = textColor.resolvedForAppearance(.aqua).toHexString()
+        let darkHex = textColor.resolvedForAppearance(.darkAqua).toHexString()
+        #endif
+        let attachment = LatexAttachment(
+          compiled: compiled,
+          fontSize: font.pointSize,
+          lightTextColor: lightHex,
+          darkTextColor: darkHex
+        )
         return NSMutableAttributedString(attachment: attachment)
       }
     }
@@ -183,7 +193,7 @@ extension Markdown.InlineCode: InlineConvertible {
     container[.backgroundColor] = MDColor(config.inlineStyle.codeBackgroundColor)
     container[.underlineStyle] =  NSUnderlineStyle.patternDot.rawValue
     container[.underlineColor] = MDColor(config.inlineStyle.codeUnderlineColor)
-    return NSMutableAttributedString(string: codeContent).mergingAttributes(container)
+    return NSMutableAttributedString(string: self.code).mergingAttributes(container)
   }
 }
 

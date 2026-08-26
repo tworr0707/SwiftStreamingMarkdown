@@ -17,6 +17,7 @@ import AppKit
 /// the heavyweight step; rendering it is cheap.
 public struct RenderableDocument: Equatable, Sendable {
   let renderables: [MarkdownRenderable]
+  public let latexCompilationSummary: LatexCompilationSummary
 
   var containsCodeBlock: Bool {
     return renderables.contains(where: { $0.isCodeBlock })
@@ -35,7 +36,9 @@ public struct RenderableDocument: Equatable, Sendable {
   ///   - document: The parsed markdown tree.
   ///   - config: Styling and behavior used during conversion.
   public init(document: Markdown.Document, config: MarkdownRenderConfig) async {
-    self.renderables = document.convert(with: config)
+    let renderables = document.convert(with: config)
+    self.renderables = renderables
+    self.latexCompilationSummary = renderables.latexCompilationSummary
   }
 
   /// Construct a renderable wrapping a single plain-text paragraph styled
@@ -55,11 +58,61 @@ public struct RenderableDocument: Equatable, Sendable {
 
   init(renderables: [MarkdownRenderable]) {
     self.renderables = renderables
+    self.latexCompilationSummary = renderables.latexCompilationSummary
   }
 
   /// An empty document, equivalent to `RenderableDocument(plainText: "", …)`
   /// but allocation-free.
   public static let empty = RenderableDocument(renderables: [])
+}
+
+private extension Array where Element == MarkdownRenderable {
+  var latexCompilationSummary: LatexCompilationSummary {
+    reduce(.empty) { $0.merging($1.latexCompilationSummary) }
+  }
+}
+
+private extension MarkdownRenderable {
+  var latexCompilationSummary: LatexCompilationSummary {
+    switch self {
+    case .latex:
+      return LatexCompilationSummary(totalExpressions: 1, failedExpressions: 0, failureCodes: [])
+    case .paragraph(_, let content), .heading(_, _, let content):
+      return content.latexCompilationSummary
+    case .orderedList(_, let items), .unorderedList(_, let items, _):
+      return items.reduce(.empty) { partial, item in
+        partial.merging(item.children.latexCompilationSummary)
+      }
+    case .table(_, let headers, let rows, _):
+      return (headers + rows.flatMap { $0 }).reduce(.empty) {
+        $0.merging($1.latexCompilationSummary)
+      }
+    case .codeBlock, .thematicBreak, .blockQuote, .image:
+      return .empty
+    }
+  }
+}
+
+private extension NSAttributedString {
+  var latexCompilationSummary: LatexCompilationSummary {
+    var successes = 0
+    var failures = 0
+    var codes: Set<LatexCompilationFailureCode> = []
+    let fullRange = NSRange(location: 0, length: length)
+    enumerateAttribute(.attachment, in: fullRange) { value, _, _ in
+      if value is LatexAttachment { successes += 1 }
+    }
+    enumerateAttribute(.latexCompilationFailure, in: fullRange) { value, _, _ in
+      guard let failure = value as? LatexCompilationFailureAttribute else { return }
+      failures += 1
+      codes.insert(failure.code)
+    }
+    return LatexCompilationSummary(
+      totalExpressions: successes + failures,
+      failedExpressions: failures,
+      failureCodes: codes
+    )
+  }
 }
 
 extension RenderableDocument {
@@ -85,7 +138,7 @@ extension MarkdownRenderable {
     case .paragraph(_, let content), .heading(_, _, let content):
       return content.string
     case .latex(_, let content):
-      return content
+      return content.source
     case .orderedList(_, let items):
       return items.plainText(separator: "\n")
     case .unorderedList(_, let items, _):

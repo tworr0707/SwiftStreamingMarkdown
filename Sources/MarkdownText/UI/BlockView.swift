@@ -46,10 +46,10 @@ struct SingleBlockView: View {
         ParagraphView(contents: contents, lineSpacing: 5)
           .fixedSize(horizontal: false, vertical: true)
           .transition(.opacity)
-      case .latex(_, let latexString):
+      case .latex(_, let compiled):
         ScrollView(.horizontal) {
           HStack(spacing: 0) {
-            BlockMathView(latex: latexString, color: config.paragraphStyle.textColor)
+            BlockMathView(compiled: compiled, color: config.paragraphStyle.textColor)
             Spacer()
           }
         }.scrollIndicators(.hidden)

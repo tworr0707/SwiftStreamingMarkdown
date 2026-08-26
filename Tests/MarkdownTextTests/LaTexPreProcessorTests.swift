@@ -3,312 +3,122 @@
 //  Licensed under the MIT License. See LICENSE in the project root for license information.
 //
 
-import Foundation
-import Markdown
 @testable import SwiftStreamingMarkdown
 import XCTest
 
 final class LaTexPreProcessorTests: XCTestCase {
+  private let preprocessor = LaTexPreProcessorImpl()
 
-  let preprocessor = LaTexPreProcessorImpl()
-
-  func testNoLatex() throws {
-    let testString = "Your string with (parentheticals), [square parentheticals], and money, like $5. That's a lot of $$!"
-    let result = preprocessor.process(input: testString)
-    XCTAssertEqual(result, testString)
+  func testPlainTextAndCurrencyAreUnchanged() {
+    let input = "Your order is $5, the budget is $1,200, and the range is $$5 to $$10."
+    XCTAssertEqual(preprocessor.process(input: input), input)
   }
 
-  func testBlockMath() {
-    let input = """
-    $$a = b + c \\\\ d = e + f$$
-    """
-    let expectation = """
-    ```blockmath
-    a = b + c \\\\ d = e + f
+  func testDollarBlockBecomesDedicatedMarkdownNode() {
+    let input = #"$$H_z = \operatorname{diag}(p)-pp^\top.$$"#
+    let expected = #"""
+    ```blockmath-dollar
+    H_z = \operatorname{diag}(p)-pp^\top.
     ```
-    """
-    let output = preprocessor.process(input: input)
-    XCTAssertEqual(output, expectation)
+    """#
+    XCTAssertEqual(preprocessor.process(input: input), expected)
   }
 
-  func testBlockMathWithIndentationAndSpaces() {
-    // Note we are adding white space after the closing `$$` since the model can return them
-    let whiteSpaces = String(repeating: " ", count: 3)
-    let input = """
-    $$   ax^2 + bx + c = 0       $$ \(whiteSpaces)
-    """
-
-    let expectation = """
-    ```blockmath
-       ax^2 + bx + c = 0
+  func testSlashBlockBecomesDedicatedMarkdownNode() {
+    let input = #"""
+    Before
+    \[
+    \boxed{x^2} + \operatorname*{argmax}_{y} f(y)
+    \]
+    After
+    """#
+    let expected = #"""
+    Before
+    ```blockmath-square
+    \boxed{x^2} + \operatorname*{argmax}_{y} f(y)
     ```
-    """
-    let output = preprocessor.process(input: input)
-    XCTAssertEqual(output, expectation)
+    After
+    """#
+    XCTAssertEqual(preprocessor.process(input: input), expected)
   }
 
-  func testBlockMathWithBracket() throws {
-    let testString = """
-    Your string with
-    \\[
-    wrapped text\\]
-    and more text
-    """
-    let expectation = """
-    Your string with
-    ```blockmath
-    wrapped text
-    ```
-    and more text
-    """
-    let newLatex = preprocessor.process(input: testString)
-    XCTAssertEqual(newLatex, expectation)
+  func testTexBodyIsNeverRewritten() {
+    let source = #"f'(a), \overrightarrow{FA}, \implies, \rightleftharpoons, \dots, \boxed{x}"#
+    let input = "\\[\n\(source)\n\\]"
+    let expected = "```blockmath-square\n\(source)\n```"
+    XCTAssertEqual(preprocessor.process(input: input), expected)
   }
 
-  func testBlockMathWithBracketWithSpaces() throws {
-    let whiteSpaces = String(repeating: " ", count: 3)
-    let testString = """
-    Your string with
-    \\[
-    wrapped text\\]\(whiteSpaces)
-    and more text
-    """
-    let expectation = """
-    Your string with
-    ```blockmath
-    wrapped text
-    ```
-    and more text
-    """
-    let newLatex = preprocessor.process(input: testString)
-    XCTAssertEqual(newLatex, expectation)
+  func testInlineSlashAndDollarMathUseDistinctSentinels() {
+    let input = #"Slash \(x^2 + y^2\) and dollar $\alpha + 1$."#
+    let expected = #"Slash `\(x^2 + y^2\)` and dollar `\($\alpha + 1$\)`."#
+    XCTAssertEqual(preprocessor.process(input: input), expected)
   }
 
-  func testInlineMath() throws {
-    let input = """
-    This is \\(inline latex\\). Some more \\( inline (parenthesis) latex \\).
-    """
-    let expectation = """
-    This is `\\(inline latex\\)`. Some more `\\( inline (parenthesis) latex \\)`.
-    """
-    let newLatex = preprocessor.process(input: input)
-    XCTAssertEqual(newLatex, expectation)
+  func testSingleLetterDollarMathIsRecognised() {
+    XCTAssertEqual(preprocessor.process(input: "Value $x$."), #"Value `\($x$\)`."#)
   }
 
-  func testTableWithDollarSign() throws {
-    let input = """
-    Here's a list of restaurant near you:
-
-
-    | Restaurant    | Price |
-    | -------- | ------- |
-    | January  | $$$$   |
-    | February | $$$$     |
-    | March    | $$$$    |
-    """
-    let newLatex = preprocessor.process(input: input)
-    XCTAssertEqual(newLatex, input)
+  func testInlineCodeIsNeverScannedForMath() {
+    let input = #"Use `\(not math\)` and `$x^2$`, then render \(y^2\)."#
+    let expected = #"Use `\(not math\)` and `$x^2$`, then render `\(y^2\)`."#
+    XCTAssertEqual(preprocessor.process(input: input), expected)
   }
 
-  func testConsecutiveFormula() throws {
-    let input = """
-    Here are a couple of most famous math formulas
-    $$a^2 + b^2 = c^$$
-
-    $$e^{i\\pi} + 1 = 0$$
-
-    $$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$
-    $$A = \\pi r^2$$
-
-    $$F = ma$$
-
-    $$\\text{Mass-Energy Equivalence: } E = mc^2$$
-
-    $$(a + b)^n = \\sum_{k=0}^{n} \\binom{n}{k} a^{n-k} b^k$$
-
-    $$f(x) = \\sum_{n=0}^{\\infty} \\frac{f^{(n)}(a)}{n!}(x - a)^n$$
-
-    $$f'(x) = \\lim_{h \\to 0} \\frac{f(x+h) - f(x)}{h}$$
-
-    $$\\int_a^b f(x)\\,dx = \\lim_{n \\to \\infty} \\sum_{i=1}^{n} f(x_i^*) \\Delta x$$
-
-    $$C = S_0 N(d_1) - K e^{-rT} N(d_2)$$
-    $$d_1 = \\frac{\\ln\\left(\\frac{S_0}{K}\\right) + \\left(r + \\frac{\\sigma^2}{2}\\right)T}{\\sigma \\sqrt{T}}, \\quad$$
-    $$d_2 = d_1 - \\sigma \\sqrt{T}$$
-    """
-    let newLatex = preprocessor.process(input: input)
-    let expectation = """
-    Here are a couple of most famous math formulas
-    ```blockmath
-    a^2 + b^2 = c^
-    ```
-
-    ```blockmath
-    e^{i\\pi} + 1 = 0
-    ```
-
-    ```blockmath
-    x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}
-    ```
-    ```blockmath
-    A = \\pi r^2
-    ```
-
-    ```blockmath
-    F = ma
-    ```
-
-    ```blockmath
-    \\text{Mass-Energy Equivalence: } E = mc^2
-    ```
-
-    ```blockmath
-    (a + b)^n = \\sum_{k=0}^{n} \\binom{n}{k} a^{n-k} b^k
-    ```
-
-    ```blockmath
-    f(x) = \\sum_{n=0}^{\\infty} \\frac{f^{(n)}(a)}{n!}(x - a)^n
-    ```
-
-    ```blockmath
-    f^\\prime(x) = \\lim_{h \\to 0} \\frac{f(x+h) - f(x)}{h}
-    ```
-
-    ```blockmath
-    \\int_a^b f(x)\\,dx = \\lim_{n \\to \\infty} \\sum_{i=1}^{n} f(x_i^*) \\Delta x
-    ```
-
-    ```blockmath
-    C = S_0 N(d_1) - K e^{-rT} N(d_2)
-    ```
-    ```blockmath
-    d_1 = \\frac{\\ln\\left(\\frac{S_0}{K}\\right) + \\left(r + \\frac{\\sigma^2}{2}\\right)T}{\\sigma \\sqrt{T}}, \\quad
-    ```
-    ```blockmath
-    d_2 = d_1 - \\sigma \\sqrt{T}
-    ```
-    """
-    // print(newLatex)
-    XCTAssertEqual(newLatex, expectation)
+  func testUnclosedInlineCodeIsNeverScannedForMath() {
+    let input = #"Start `literal \(not math\)"#
+    XCTAssertEqual(preprocessor.process(input: input), input)
   }
 
-  func testInline() throws {
-    let text = """
-    This double integral:
-    - Sweeps across a rectangular region from \\( x = 0 \\) to \\( \\pi \\), and \\( y = 1 \\) to \\( e \\)
-    - Combines a sine of a product \\( xy \\), a logarithmic denominator, and a cosine term multiplied by a polynomial
-    - Is a great example of how calculus can get delightfully \\( \\text{tangled} \\)
-    """
-    let processed = preprocessor.processInlineMath(input: text)
-    let expected = """
-    This double integral:
-    - Sweeps across a rectangular region from `\\( x = 0 \\)` to `\\( \\pi \\)`, and `\\( y = 1 \\)` to `\\( e \\)`
-    - Combines a sine of a product `\\( xy \\)`, a logarithmic denominator, and a cosine term multiplied by a polynomial
-    - Is a great example of how calculus can get delightfully `\\( \\text{tangled} \\)`
-    """
-    XCTAssertEqual(processed, expected)
+  func testMathContainingBackticksUsesALongerCodeFence() {
+    let input = #"Render \(\text{`code`}\)."#
+    let expected = #"Render ``\(\text{`code`}\)``."#
+    XCTAssertEqual(preprocessor.process(input: input), expected)
   }
 
-  func testBlockMathWithWhitespace() throws {
-    let text = """
-    - Net force on the ring:
-      \\[
-        F = f - m\\,g = (k\\,m\\,g) - m\\,g = (k-1)\\,m\\,g.
-      \\]
-    - Therefore the ring’s acceleration is
-      \\[
-        a_{\\rm ring} = \\frac{F}{m} = (k-1)\\,g
-        \\quad\\text{(upward).}
-      \\]
-    """
-    let processed = preprocessor.processBlockMath(input: text)
-    let expected = """
-    - Net force on the ring:
-      ```blockmath
-        F = f - m\\,g = (k\\,m\\,g) - m\\,g = (k-1)\\,m\\,g.
-      ```
-    - Therefore the ring’s acceleration is
-      ```blockmath
-        a_{\\rm ring} = \\frac{F}{m} = (k-1)\\,g
-        \\quad\\text{(upward).}
-      ```
-    """
-    XCTAssertEqual(expected, processed)
+  func testFencedCodeIsNeverScannedForMath() {
+    let input = #"""
+    ```swift
+    let formula = "\(not math\)"
+    let dollars = "$x^2$"
+    ```
+    Outside \(x^2\).
+    """#
+    let expected = #"""
+    ```swift
+    let formula = "\(not math\)"
+    let dollars = "$x^2$"
+    ```
+    Outside `\(x^2\)`.
+    """#
+    XCTAssertEqual(preprocessor.process(input: input), expected)
   }
 
-  func testBlockMathWithSpecificSymbols() throws {
-    let text = """
-    \\[
-    \\varphi(x) = f(x) - \\big(f(a) + f'(a)(x-a)\\big).
-    \\]
-
-    - Vector \\(\\overrightarrow{FA} = (a+c,0)\\)
-
-    \\[
-    2+2(2q-1) = 2q^2 \\implies 2+4q-2 = 2q^2 \\implies 4q = 2q^2 \\implies q^2 - 2q = 0.
-    \\]
-
-    \\[
-    Fe^{3+}_{(aq)} + xCl^-_{(aq)} \\rightleftharpoons [FeCl_x]^{3-x}_{(aq)} \\quad (x = 1,2,3,4)
-    \\]
-
-    \\(a_1, \\dots, a_n\\)
-    """
-
-    let processed = preprocessor.process(input: text)
-    let expected = """
-    ```blockmath
-    \\varphi(x) = f(x) - (f(a) + f^\\prime(a)(x-a)).
-    ```
-
-    - Vector `\\(\\vec{FA} = (a+c,0)\\)`
-
-    ```blockmath
-    2+2(2q-1) = 2q^2 \\Rightarrow 2+4q-2 = 2q^2 \\Rightarrow 4q = 2q^2 \\Rightarrow q^2 - 2q = 0.
-    ```
-
-    ```blockmath
-    Fe^{3+}_{(aq)} + xCl^-_{(aq)} \\Leftrightarrow [FeCl_x]^{3-x}_{(aq)} \\quad (x = 1,2,3,4)
-    ```
-
-    `\\(a_1, \\ldots, a_n\\)`
-    """
-    XCTAssertEqual(expected, processed)
+  func testUnclosedStreamingDelimitersRemainLiteral() {
+    let inputs = [#"Partial \(x +"#, "Partial $x +", #"Partial \[\nx +"#, "Partial $$\nx +"]
+    for input in inputs {
+      XCTAssertEqual(preprocessor.process(input: input), input)
+    }
   }
 
-  // MARK: - Matching-rule gating
+  func testConsecutiveDollarBlocksAreNotMistakenForInlineMath() {
+    let input = "$$x^2$$\n$$y^2$$"
+    let expected = "```blockmath-dollar\nx^2\n```\n```blockmath-dollar\ny^2\n```"
+    XCTAssertEqual(preprocessor.process(input: input), expected)
+  }
 
-  func testBlockDollarDisabledLeavesDollarsAsPlainText() {
-    let input = """
-    The price is $$5 and the total is $$10.
-    $$a = b + c$$
-    """
-    let processed = preprocessor.process(
+  func testIndentedSlashBlockKeepsContainerIndentation() {
+    let input = "- Result:\n  \\[\n    x = y\n  \\]"
+    let expected = "- Result:\n  ```blockmath-square\n    x = y\n  ```"
+    XCTAssertEqual(preprocessor.process(input: input), expected)
+  }
+
+  func testMatchingRulesAreStrictlyGated() {
+    let input = #"$$a=b$$, $x$, \(y\), and \[z\]"#
+    let output = preprocessor.process(
       input: input,
-      matchingRules: [.inlineSlashBracket, .blockSlashBracket]
+      matchingRules: [.inlineSlashBracket]
     )
-    XCTAssertEqual(processed, input)
-  }
-
-  func testBlockDollarDisabledStillProcessesOtherRules() {
-    let input = """
-    $$a = b + c$$
-    \\[
-    x = y + z
-    \\]
-    Inline \\(p + q\\) here.
-    """
-    let expected = """
-    $$a = b + c$$
-    ```blockmath
-    x = y + z
-    ```
-    Inline `\\(p + q\\)` here.
-    """
-    let processed = preprocessor.process(
-      input: input,
-      matchingRules: [.inlineSlashBracket, .blockSlashBracket]
-    )
-    XCTAssertEqual(processed, expected)
+    XCTAssertEqual(output, #"$$a=b$$, $x$, `\(y\)`, and \[z\]"#)
   }
 }

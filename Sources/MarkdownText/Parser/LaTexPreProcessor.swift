@@ -4,240 +4,268 @@
 //
 
 import Foundation
-import RegexBuilder
 
-/// Pre-process the inline and block latex in markdown.
-/// This is a less heavy-weight approach than forking commonmark-gfm and swift-markdown to support parsing latex nodes.
+/// Converts supported math delimiters into Markdown nodes without changing the
+/// TeX body. Compilation happens later, exactly once, when renderables are built.
 protocol LaTexPreProcessor {
   func process(input: String, matchingRules: [MarkdownParseOption.LatexMatching]) -> String
 }
 
 extension LaTexPreProcessor {
   func process(input: String) -> String {
-    return process(input: input, matchingRules: MarkdownParseOption.LatexMatching.allCases)
+    process(input: input, matchingRules: MarkdownParseOption.LatexMatching.allCases)
   }
 }
 
 final class LaTexPreProcessorImpl: LaTexPreProcessor {
+  static let blockSlashLanguage = "blockmath-square"
+  static let blockDollarLanguage = "blockmath-dollar"
+  static let inlineSlashPrefix = "\\("
+  static let inlineSlashSuffix = "\\)"
+  static let inlineDollarPrefix = "\\($"
+  static let inlineDollarSuffix = "$\\)"
 
-  static let latexRef = Reference(Substring.self)
-  static let latexOpenIndentation = Reference(Substring.self)
-
-  static let dollarBlockMath = Regex {
-    Anchor.startOfLine
-    Capture(as: latexOpenIndentation) {
-      ZeroOrMore(.horizontalWhitespace)
-    }
-    "$$"
-    Capture(as: latexRef) {
-      OneOrMore(.any, .reluctant)
-    }
-    ZeroOrMore(.horizontalWhitespace)
-    "$$"
-    ZeroOrMore(.horizontalWhitespace)
-    Anchor.endOfLine
-  }
-
-  static let slashBracketMath = Regex {
-    Anchor.startOfLine
-    Capture(as: latexOpenIndentation) {
-      ZeroOrMore(.horizontalWhitespace)
-    }
-    "\\["
-    Capture(as: latexRef) {
-      OneOrMore(.any, .reluctant)
-    }
-    ZeroOrMore(.horizontalWhitespace)
-    "\\]"
-    ZeroOrMore(.horizontalWhitespace)
-    Anchor.endOfLine
-  }
-
-  static let inlineParenthesisMath = Regex {
-    "\\("
-    Capture(as: latexRef) {
-      OneOrMore(.any, .reluctant)
-    }
-    "\\)"
-  }
-
-  static let boxedLatex = Regex {
-    Capture {
-      "\\boxed"
-    }
-  }
-
-  static let dfracLatex = Regex {
-    Capture {
-      "\\dfrac"
-    }
-  }
-
-  static let tfracLatex = Regex {
-    Capture {
-      "\\tfrac"
-    }
-  }
-
-  static let bracketSize = Regex {
-    Capture {
-      ChoiceOf {
-        "\\bigl"
-        "\\biggl"
-        "\\Bigl"
-        "\\Biggl"
-        "\\bigr"
-        "\\biggr"
-        "\\Bigr"
-        "\\Biggr"
-        "\\big"
-      }
-    }
-  }
-
-  static let primeLatex = Regex {
-    Capture {
-      "'"
-    }
-  }
-
-  static let vectorLatex = Regex {
-    Capture {
-      "\\overrightarrow"
-    }
-  }
-
-  static let rightArrowLatex = Regex {
-    Capture {
-      "\\implies"
-    }
-  }
-
-  static let harpoonsLatex = Regex {
-    Capture {
-      "\\rightleftharpoons"
-    }
-  }
-
-  static let dotsLatex = Regex {
-    Capture {
-      "\\dots"
-    }
-  }
-
-  static let customCodeType = "blockmath"
-  static let inlineCodePrefix = "\\("
-  static let inlineCodeSuffix = "\\)"
-  static let newline = "\n"
-
-  init() {}
+  private static let slashBlock = try! NSRegularExpression(
+    pattern: #"(?ms)^(\h*)\\\[(.+?)\\\]\h*$"#
+  )
+  private static let dollarBlock = try! NSRegularExpression(
+    pattern: #"(?ms)^(\h*)\$\$(.+?)\$\$\h*$"#
+  )
 
   func process(input: String, matchingRules: [MarkdownParseOption.LatexMatching]) -> String {
     let rules = Set(matchingRules)
-    let result = processBlockMath(input: input, rules: rules)
-    return processInlineMath(input: result, rules: rules)
+    let blocks = transformOutsideFences(input) { segment in
+      processBlockMath(segment, rules: rules)
+    }
+    return transformOutsideFences(blocks) { segment in
+      processInlineMath(segment, rules: rules)
+    }
   }
 
-  /// This replace block math with a special code block node. By treating it as a code block it will avoid over escaping characters within latex.
-  func processBlockMath(input: String, rules: Set<MarkdownParseOption.LatexMatching>) -> String {
-    var result = input
-    if rules.contains(.blockDollar) {
-      result.replace(Self.dollarBlockMath, with: { match in
-        let indentation = match[Self.latexOpenIndentation]
-        let latex = match[Self.latexRef]
-        return Self.buildCodeBlock(indentation: indentation, latex: latex)
-      })
+  private func transformOutsideFences(
+    _ input: String,
+    transform: (String) -> String
+  ) -> String {
+    var output: [String] = []
+    var ordinary: [String] = []
+    var fence: String?
+
+    func flushOrdinary() {
+      guard !ordinary.isEmpty else { return }
+      output.append(transform(ordinary.joined(separator: "\n")))
+      ordinary.removeAll(keepingCapacity: true)
     }
 
+    for line in input.components(separatedBy: "\n") {
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      if let currentFence = fence {
+        output.append(line)
+        if trimmed.hasPrefix(currentFence) {
+          fence = nil
+        }
+        continue
+      }
+      if let marker = openingFence(trimmed) {
+        flushOrdinary()
+        fence = marker
+        output.append(line)
+      } else {
+        ordinary.append(line)
+      }
+    }
+    flushOrdinary()
+    return output.joined(separator: "\n")
+  }
+
+  private func processBlockMath(
+    _ input: String,
+    rules: Set<MarkdownParseOption.LatexMatching>
+  ) -> String {
+    var result = input
     if rules.contains(.blockSlashBracket) {
-      result.replace(Self.slashBracketMath, with: { match in
-        let indentation = match[Self.latexOpenIndentation]
-        let latex = match[Self.latexRef]
-        return Self.buildCodeBlock(indentation: indentation, latex: latex)
-      })
+      result = replaceBlocks(
+        in: result,
+        regex: Self.slashBlock,
+        language: Self.blockSlashLanguage
+      )
+    }
+    if rules.contains(.blockDollar) {
+      result = replaceBlocks(
+        in: result,
+        regex: Self.dollarBlock,
+        language: Self.blockDollarLanguage
+      )
     }
     return result
   }
 
-  /// This wraps inline math as inline code to avoid over-unescaping issue
-  func processInlineMath(input: String, rules: Set<MarkdownParseOption.LatexMatching>) -> String {
-    guard rules.contains(.inlineSlashBracket) else { return input }
-    return input.replacing(Self.inlineParenthesisMath, with: { match in
-      let latex = String(match[Self.latexRef]).filteringUnsupportedSyntaxes()
-      return "`\\(\(latex)\\)`"
-    })
+  private func replaceBlocks(
+    in input: String,
+    regex: NSRegularExpression,
+    language: String
+  ) -> String {
+    let source = input as NSString
+    let matches = regex.matches(
+      in: input,
+      range: NSRange(location: 0, length: source.length)
+    )
+    guard !matches.isEmpty else { return input }
+    let result = NSMutableString(string: input)
+    for match in matches.reversed() {
+      let indentation = source.substring(with: match.range(at: 1))
+      let expression = trimmingDelimiterLines(source.substring(with: match.range(at: 2)))
+      let fenced = "\(indentation)```\(language)\n\(expression)\n\(indentation)```"
+      result.replaceCharacters(in: match.range, with: fenced)
+    }
+    return result as String
   }
 
-  // MARK: - Convenience overloads (default to every supported rule)
-
-  func processBlockMath(input: String) -> String {
-    return processBlockMath(input: input, rules: Set(MarkdownParseOption.LatexMatching.allCases))
+  /// Removes only the otherwise-empty line fragments occupied by the opening
+  /// and closing delimiters. Whitespace within the TeX body is preserved.
+  private func trimmingDelimiterLines(_ expression: String) -> String {
+    var lines = expression.components(separatedBy: "\n")
+    if lines.first?.trimmingCharacters(in: .whitespaces).isEmpty == true {
+      lines.removeFirst()
+    }
+    if lines.last?.trimmingCharacters(in: .whitespaces).isEmpty == true {
+      lines.removeLast()
+    }
+    return lines.joined(separator: "\n")
   }
 
-  func processInlineMath(input: String) -> String {
-    return processInlineMath(input: input, rules: Set(MarkdownParseOption.LatexMatching.allCases))
+  private func processInlineMath(
+    _ input: String,
+    rules: Set<MarkdownParseOption.LatexMatching>
+  ) -> String {
+    var output = ""
+    var cursor = input.startIndex
+
+    while cursor < input.endIndex {
+      if input[cursor] == "`" {
+        let markerEnd = runEnd(of: "`", from: cursor, in: input)
+        let marker = String(input[cursor..<markerEnd])
+        if let close = input[markerEnd...].range(of: marker)?.upperBound {
+          output += String(input[cursor..<close])
+          cursor = close
+          continue
+        }
+        output += String(input[cursor...])
+        break
+      }
+
+      if rules.contains(.inlineSlashBracket),
+         input[cursor...].hasPrefix(Self.inlineSlashPrefix),
+         !isEscaped(cursor, in: input),
+         let close = matchingSlashSuffix(from: cursor, in: input) {
+        let bodyStart = input.index(cursor, offsetBy: Self.inlineSlashPrefix.count)
+        let body = String(input[bodyStart..<close])
+        output += inlineCode("\(Self.inlineSlashPrefix)\(body)\(Self.inlineSlashSuffix)")
+        cursor = input.index(close, offsetBy: Self.inlineSlashSuffix.count)
+        continue
+      }
+
+      if rules.contains(.inlineDollar), input[cursor] == "$",
+         !isEscaped(cursor, in: input), !input[cursor...].hasPrefix("$$"),
+         let match = matchingDollar(from: cursor, in: input) {
+        let bodyStart = input.index(after: cursor)
+        let body = String(input[bodyStart..<match])
+        if looksLikeMath(body) {
+          output += inlineCode("\(Self.inlineDollarPrefix)\(body)\(Self.inlineDollarSuffix)")
+          cursor = input.index(after: match)
+          continue
+        }
+      }
+
+      output.append(input[cursor])
+      cursor = input.index(after: cursor)
+    }
+    return output
   }
 
-  private static func buildCodeBlock(indentation: Substring, latex: Substring) -> String {
-    let processedLatex = latex.trimmingCharacters(in: .newlines).filteringUnsupportedSyntaxes()
-    let nextLineIntendation = latex.hasPrefix(Self.newline) ? "" : indentation
-    return "\(indentation)```\(Self.customCodeType)\(Self.newline)\(nextLineIntendation)\(processedLatex)\(Self.newline)\(indentation)```"
-  }
-}
-
-extension String {
-
-  func filteringUnsupportedSyntaxes() -> String {
-    return self
-      .strippingBoxedLatex()
-      .replacingfrac()
-      .replacingPrime()
-      .replacingVector()
-      .replacingImplies()
-      .replacingHarpoons()
-      .replacingDots()
-      .strippingBracketSizeCommands()
+  private func matchingSlashSuffix(
+    from opening: String.Index,
+    in input: String
+  ) -> String.Index? {
+    var index = input.index(opening, offsetBy: Self.inlineSlashPrefix.count)
+    while index < input.endIndex, input[index] != "\n" {
+      if input[index...].hasPrefix(Self.inlineSlashSuffix), !isEscaped(index, in: input) {
+        return index
+      }
+      index = input.index(after: index)
+    }
+    return nil
   }
 
-  /// This strips "\boxed" string from a given latex. This is because our rendering engine does not support \boxed{...} yet.
-  func strippingBoxedLatex() -> String {
-    return self.replacing(LaTexPreProcessorImpl.boxedLatex, with: "")
+  private func inlineCode(_ content: String) -> String {
+    var longestRun = 0
+    var index = content.startIndex
+    while index < content.endIndex {
+      if content[index] == "`" {
+        let end = runEnd(of: "`", from: index, in: content)
+        longestRun = max(longestRun, content.distance(from: index, to: end))
+        index = end
+      } else {
+        index = content.index(after: index)
+      }
+    }
+    let delimiter = String(repeating: "`", count: longestRun + 1)
+    let padding = content.hasPrefix("`") || content.hasSuffix("`") ? " " : ""
+    return "\(delimiter)\(padding)\(content)\(padding)\(delimiter)"
   }
 
-  /// Replacing `dfrac` and `tfac` which is unsupported into simple `frac`
-  func replacingfrac() -> String {
-    return self
-      .replacing(LaTexPreProcessorImpl.dfracLatex, with: "\\frac")
-      .replacing(LaTexPreProcessorImpl.tfracLatex, with: "\\frac")
+  private func matchingDollar(from opening: String.Index, in input: String) -> String.Index? {
+    var index = input.index(after: opening)
+    while index < input.endIndex, input[index] != "\n" {
+      if input[index] == "$", !isEscaped(index, in: input),
+         !input[index...].hasPrefix("$$") {
+        return index
+      }
+      index = input.index(after: index)
+    }
+    return nil
   }
 
-  /// Replacing `'` which is unsupported into `^prime`
-  func replacingPrime() -> String {
-    return self.replacing(LaTexPreProcessorImpl.primeLatex, with: "^\\prime")
+  private func looksLikeMath(_ expression: String) -> Bool {
+    let trimmed = expression.trimmingCharacters(in: .whitespaces)
+    guard !trimmed.isEmpty, !trimmed.contains("  ") else { return false }
+    if trimmed.range(of: #"^[£€$]?\d+(?:[.,]\d+)?$"#, options: .regularExpression) != nil {
+      return false
+    }
+    if trimmed.count == 1, trimmed.first?.isLetter == true { return true }
+    return trimmed.contains(where: { "\\^_=+−*/{}[]()<>|".contains($0) })
+      || trimmed.range(
+        of: #"\b(?:sin|cos|tan|log|ln|exp|lim|max|min)\b"#,
+        options: .regularExpression
+      ) != nil
   }
 
-  /// Replacing `overrightarrow` which is unsupported into `vec`
-  func replacingVector() -> String {
-    return self.replacing(LaTexPreProcessorImpl.vectorLatex, with: "\\vec")
+  private func openingFence(_ line: String) -> String? {
+    if line.hasPrefix("```") { return "```" }
+    if line.hasPrefix("~~~") { return "~~~" }
+    return nil
   }
 
-  /// Replacing `implies` which is unsupported into `Rightarrow`
-  func replacingImplies() -> String {
-    return self.replacing(LaTexPreProcessorImpl.rightArrowLatex, with: "\\Rightarrow")
+  private func runEnd(
+    of character: Character,
+    from start: String.Index,
+    in input: String
+  ) -> String.Index {
+    var index = start
+    while index < input.endIndex, input[index] == character {
+      index = input.index(after: index)
+    }
+    return index
   }
 
-  /// Replacing `harpoons` which is unsupported into `Leftrightarrow`
-  func replacingHarpoons() -> String {
-    return self.replacing(LaTexPreProcessorImpl.harpoonsLatex, with: "\\Leftrightarrow")
-  }
-
-  /// Replacing `dots` which is unsupported into `ldots`
-  func replacingDots() -> String {
-    return self.replacing(LaTexPreProcessorImpl.dotsLatex, with: "\\ldots")
-  }
-
-  /// Stripping commands to specify bracket sizes(`\Biggl` etc) which is unsupported
-  func strippingBracketSizeCommands() -> String {
-    return self.replacing(LaTexPreProcessorImpl.bracketSize, with: "")
+  private func isEscaped(_ index: String.Index, in input: String) -> Bool {
+    var cursor = index
+    var count = 0
+    while cursor > input.startIndex {
+      let previous = input.index(before: cursor)
+      guard input[previous] == "\\" else { break }
+      count += 1
+      cursor = previous
+    }
+    return count.isMultiple(of: 2) == false
   }
 }
