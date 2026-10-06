@@ -161,6 +161,7 @@ struct TableView: View {
   var scrollView: some View {
     ScrollView([.horizontal]) {
       gridView
+        .markdownHorizontalScrollContent()
         .overlay(
           RoundedRectangle(cornerRadius: 12)
             .inset(by: 0.5)
@@ -182,7 +183,7 @@ struct TableView: View {
           }
       }
     }
-    .scrollIndicators(.hidden)
+    .markdownHorizontalScrollViewport()
     .contentShape(Rectangle())
   }
 

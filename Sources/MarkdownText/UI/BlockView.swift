@@ -52,7 +52,9 @@ struct SingleBlockView: View {
             BlockMathView(compiled: compiled, color: config.paragraphStyle.textColor)
             Spacer()
           }
-        }.scrollIndicators(.hidden)
+          .markdownHorizontalScrollContent()
+        }
+        .markdownHorizontalScrollViewport()
       case .orderedList(_, let items):
         OrderedListView(items: items)
       case .unorderedList(_, let items, let nestedLevel):

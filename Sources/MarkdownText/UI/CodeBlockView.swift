@@ -63,8 +63,11 @@ struct CodeBlockView: View {
             .transition(.opacity)
         }
       }
+      .markdownHorizontalScrollContent()
 
-    }.transaction { transaction in
+    }
+    .markdownHorizontalScrollViewport()
+    .transaction { transaction in
       // The horizontal scrollView resizing animation was causing the code block to animate
       // all janky.
       transaction.animation = nil
