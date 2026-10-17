@@ -95,24 +95,28 @@ private struct MarkdownHorizontalScrollContentModifier: ViewModifier {
   @Environment(\.colorSchemeContrast) private var contrast
 
   func body(content: Content) -> some View {
-    content.mask {
-      if metrics.hasOverflow && !reduceTransparency && contrast != .increased {
-        GeometryReader { proxy in
-          // The mask belongs to the content, leaving borders and native indicators intact.
-          let width = max(1, proxy.size.width)
-          let leading = min(max(0, metrics.visibleMinX), width)
-          let trailing = min(max(leading, metrics.visibleMaxX), width)
-          let fade = min(12, (trailing - leading) / 2)
-          LinearGradient(stops: [
-            .init(color: metrics.hidesLeadingContent ? .white.opacity(0.25) : .white, location: leading / width),
-            .init(color: .white, location: min(trailing, leading + fade) / width),
-            .init(color: .white, location: max(leading + fade, trailing - fade) / width),
-            .init(color: metrics.hidesTrailingContent ? .white.opacity(0.25) : .white, location: trailing / width)
-          ], startPoint: .leading, endPoint: .trailing)
+    content
+      #if os(macOS)
+      .background { MarkdownScrollWheelBridge() }
+      #endif
+      .mask {
+        if metrics.hasOverflow && !reduceTransparency && contrast != .increased {
+          GeometryReader { proxy in
+            // The mask belongs to the content, leaving borders and native indicators intact.
+            let width = max(1, proxy.size.width)
+            let leading = min(max(0, metrics.visibleMinX), width)
+            let trailing = min(max(leading, metrics.visibleMaxX), width)
+            let fade = min(12, (trailing - leading) / 2)
+            LinearGradient(stops: [
+              .init(color: metrics.hidesLeadingContent ? .white.opacity(0.25) : .white, location: leading / width),
+              .init(color: .white, location: min(trailing, leading + fade) / width),
+              .init(color: .white, location: max(leading + fade, trailing - fade) / width),
+              .init(color: metrics.hidesTrailingContent ? .white.opacity(0.25) : .white, location: trailing / width)
+            ], startPoint: .leading, endPoint: .trailing)
+          }
+        } else {
+          Rectangle().fill(.white)
         }
-      } else {
-        Rectangle().fill(.white)
       }
-    }
   }
 }
